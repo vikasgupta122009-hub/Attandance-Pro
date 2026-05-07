@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitives
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    // Verifies that the user has a verified email (Standard for Spark/Enterprise apps)
+    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+
+    function getUserData(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    // Check if current user is admin of the company
+    function isAdminOfCompany(companyCode) {
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/companies/$(companyCode)) &&
+             get(/databases/$(database)/documents/companies/$(companyCode)).data.adminId == request.auth.uid;
+    }
+
+    // 1. User Profiles
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.uid == userId &&
+               data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+               data.role in ['admin', 'worker'] &&
+               (data.companyCode == null || (data.companyCode is string && data.companyCode.size() <= 20));
+      }
+
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && (
+        isOwner(userId) || 
+        // Allow team members to see each other
+        (resource.data.companyCode != null && resource.data.companyCode == getUserData(request.auth.uid).companyCode) ||
+        // Allow admin to see their workers
+        isAdminOfCompany(resource.data.companyCode)
+      );
+      
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+                    incoming().role == existing().role; // Role is immutable once set
+    }
+
+    // 2. Companies
+    match /companies/{companyCode} {
+      function isValidCompany(data) {
+        return data.code == companyCode &&
+               data.adminId == request.auth.uid &&
+               data.name is string && data.name.size() > 0 && data.name.size() < 100;
+      }
+
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() && isValidCompany(incoming());
+      allow update: if isSignedIn() && isValidCompany(incoming()) && 
+                    incoming().adminId == existing().adminId;
+    }
+
+    // 3. Attendance (The Master Gate Pattern)
+    match /attendance/{attendanceId} {
+      function isValidAttendance(data) {
+        return data.userId is string && isValidId(data.userId) &&
+               data.companyCode is string && isValidId(data.companyCode) &&
+               data.date is string && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+               data.status in ['present', 'absent'];
+      }
+
+      // Pillar 8: Secure List Queries
+      allow list: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || 
+        // Secure query by companyCode: Workers can see their team attendance
+        (resource.data.companyCode == getUserData(request.auth.uid).companyCode) ||
+        // Admin can see their company attendance
+        isAdminOfCompany(resource.data.companyCode)
+      );
+      
+      allow get: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || 
+        isAdminOfCompany(resource.data.companyCode)
+      );
+
+      allow create: if isSignedIn() && (
+        // Workers marking their own attendance
+        (isOwner(incoming().userId) && isValidAttendance(incoming()) && incoming().modifiedByAdmin == false) ||
+        // Admins creating records
+        (isAdminOfCompany(incoming().companyCode) && isValidAttendance(incoming()))
+      );
+
+      allow update: if isSignedIn() && (
+        // Admin overrides
+        (isAdminOfCompany(existing().companyCode) && isValidAttendance(incoming()) && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'modifiedByAdmin', 'updatedAt', 'method'])) ||
+        // Workers updating their own (rare, but in case of retry/fix)
+        (isOwner(existing().userId) && isValidAttendance(incoming()) && !existing().modifiedByAdmin &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'checkInTime', 'location', 'method']))
+      );
+    }
+
+    // 4. Messages
+    match /messages/{messageId} {
+      function isValidMessage(data) {
+        return data.senderId is string && isValidId(data.senderId) &&
+               data.receiverId is string && isValidId(data.receiverId) &&
+               data.content is string && data.content.size() > 0 && data.content.size() < 1000;
+      }
+
+      allow list: if isSignedIn() && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow get: if isSignedIn() && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      
+      allow create: if isSignedIn() && isOwner(incoming().senderId) && isValidMessage(incoming());
+      
+      allow update: if isSignedIn() && (
+        // Receiver marking as read
+        (resource.data.receiverId == request.auth.uid && 
+         incoming().diff(existing()).affectedKeys().hasOnly(['read']))
+      );
+    }
+  }
+}

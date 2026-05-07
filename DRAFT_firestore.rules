@@ -1,0 +1,130 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Role helpers
+    function getUserData(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function isAdminOfCompany(companyCode) {
+      return isSignedIn() && get(/databases/$(database)/documents/companies/$(companyCode)).data.adminId == request.auth.uid;
+    }
+
+    function isWorkerOfCompany(userId, companyCode) {
+      return getUserData(userId).companyCode == companyCode;
+    }
+
+    // --- Entity Validations ---
+
+    function isValidUser(data) {
+      return data.uid is string && data.uid == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.role in ['admin', 'worker'] &&
+             (data.companyCode == null || (data.companyCode is string && data.companyCode.size() <= 50));
+    }
+
+    function isValidCompany(data) {
+      return data.code is string && data.code.size() >= 4 && data.code.size() <= 20 &&
+             data.adminId == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100;
+    }
+
+    function isValidAttendance(data) {
+      return data.userId is string && isValidId(data.userId) &&
+             data.date is string && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+             data.status in ['present', 'absent'] &&
+             (data.status == 'absent' || (
+               data.checkInTime is number &&
+               data.method in ['button', 'qr', 'manual'] &&
+               data.location.lat is number &&
+               data.location.lng is number
+             )) &&
+             data.modifiedByAdmin is bool &&
+             data.updatedAt is number;
+    }
+
+    function isValidMessage(data) {
+      return data.senderId == request.auth.uid &&
+             data.senderName is string &&
+             data.receiverId is string &&
+             data.content is string && data.content.size() > 0 && data.content.size() <= 1000 &&
+             data.createdAt is number &&
+             data.read is bool;
+    }
+
+    // --- Collection Routes ---
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn(); // Filtered by logic usually
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().role != 'admin'; 
+      // Special case: First user can be admin? No, we don't know who is first.
+      // Let's allow setting role on create, but once set it's hard to change.
+      allow update: if isOwner(userId) && 
+                      isValidUser(incoming()) && 
+                      incoming().role == existing().role && 
+                      (!existing().keys().hasAny(['companyCode']) || incoming().companyCode == existing().companyCode);
+    }
+
+    match /companies/{code} {
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() && isValidCompany(incoming()) && !exists(/databases/$(database)/documents/companies/$(code));
+      allow update: if isOwner(existing().adminId) && isValidCompany(incoming());
+    }
+
+    match /attendance/{attendanceId} {
+      function canReadAttendance() {
+        return isOwner(resource.data.userId) || isAdminOfCompany(getUserData(resource.data.userId).companyCode);
+      }
+
+      allow get: if isSignedIn() && canReadAttendance();
+      allow list: if isSignedIn() && (isOwner(resource.data.userId) || isAdminOfCompany(getUserData(resource.data.userId).companyCode));
+      
+      allow create: if isSignedIn() && isValidAttendance(incoming()) && (
+        isOwner(incoming().userId) || (isAdminOfCompany(getUserData(incoming().userId).companyCode))
+      );
+      
+      allow update: if isSignedIn() && isValidAttendance(incoming()) && (
+        (isOwner(existing().userId) && !existing().modifiedByAdmin && !incoming().modifiedByAdmin) || 
+        (isAdminOfCompany(getUserData(existing().userId).companyCode))
+      );
+    }
+
+    match /messages/{messageId} {
+      allow get: if isSignedIn() && (isOwner(resource.data.senderId) || isOwner(resource.data.receiverId));
+      allow list: if isSignedIn() && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow create: if isSignedIn() && isValidMessage(incoming());
+      allow update: if isSignedIn() && isOwner(existing().receiverId) && incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+    }
+  }
+}

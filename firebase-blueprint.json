@@ -1,0 +1,86 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents a user (Admin or Worker) in the system.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "worker"] },
+        "companyCode": { "type": "string", "description": "The code used to link workers to an admin's company." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "role"]
+    },
+    "Company": {
+      "title": "Company",
+      "description": "Represents a company group created by an Admin.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "Unique permanent company code." },
+        "adminId": { "type": "string" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "adminId"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Daily attendance record for a worker.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "companyCode": { "type": "string" },
+        "date": { "type": "string", "description": "YYYY-MM-DD" },
+        "status": { "type": "string", "enum": ["present", "absent"] },
+        "checkInTime": { "type": "string", "format": "date-time" },
+        "method": { "type": "string", "enum": ["button", "qr", "manual"] },
+        "location": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          }
+        },
+        "modifiedByAdmin": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "date", "status", "companyCode"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Simple message between worker and admin.",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "companyCode": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "read": { "type": "boolean" }
+      },
+      "required": ["senderId", "receiverId", "content", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles."
+    },
+    "/companies/{companyCode}": {
+      "schema": "Company",
+      "description": "Company registration records."
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "Attendance",
+      "description": "Flattened attendance records. ID format: userId_YYYY-MM-DD"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Communications between workers and admins."
+    }
+  }
+}
