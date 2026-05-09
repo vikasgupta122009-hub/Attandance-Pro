@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db, firestore } from '../lib/firebase';
 import { collection, query, where, getDocs, doc, setDoc, onSnapshot, orderBy, limit, addDoc } from 'firebase/firestore';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isWithinInterval } from 'date-fns';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isWithinInterval, parseISO } from 'date-fns';
 import { Users, QrCode, MessageSquare, Map, Edit2, CheckCircle, XCircle, LogOut, ChevronRight, MapPin, Send, Download, Briefcase, Calendar, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -18,7 +18,11 @@ export function AdminDashboard() {
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [showOverrideModal, setShowOverrideModal] = useState<{ userId: string; date: string } | null>(null);
-  const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
+  const [selectedWorkerHistory, setSelectedWorkerHistory] = useState<User | null>(null);
+  const [workerAttendance, setWorkerAttendance] = useState<Attendance[]>([]);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [replyText, setReplyText] = useState('');
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
 
@@ -49,13 +53,15 @@ export function AdminDashboard() {
     const qMessages = query(
       collection(firestore, 'messages'),
       where('receiverId', '==', user.uid),
-      orderBy('timestamp', 'desc'),
       limit(50)
     );
     const unsubMessages = onSnapshot(qMessages, (snap) => {
-      setMessages(snap.docs.map(d => ({ ...d.data(), id: d.id }) as Message));
+      const docs = snap.docs.map(d => ({ ...d.data(), id: d.id }) as Message);
+      // Sort in memory
+      docs.sort((a, b) => b.createdAt - a.createdAt);
+      setMessages(docs);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'messages');
+      console.error('Messages query error:', error);
     });
 
     return () => {
@@ -64,6 +70,24 @@ export function AdminDashboard() {
       unsubMessages();
     };
   }, [user, todayStr]);
+
+  // Listen for specific worker history when selected
+  useEffect(() => {
+    if (!selectedWorkerHistory || !user?.companyCode) return;
+
+    const q = query(
+      collection(firestore, 'attendance'),
+      where('userId', '==', selectedWorkerHistory.uid),
+      orderBy('date', 'desc'),
+      limit(100)
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
+      setWorkerAttendance(snap.docs.map(d => d.data() as Attendance));
+    });
+
+    return () => unsub();
+  }, [selectedWorkerHistory, user?.companyCode]);
 
   const handleOverride = async (userId: string, date: string, newStatus: 'present' | 'absent') => {
     const attendanceId = `${userId}_${date}`;
@@ -139,6 +163,63 @@ export function AdminDashboard() {
     });
 
     doc.save(`${companyTitle}_${format(new Date(), 'MMMM_yyyy')}_Report.pdf`);
+  };
+
+  const exportWorkerReport = async (worker: User, workerRecords: Attendance[]) => {
+    setIsGeneratingPdf(true);
+    try {
+      const doc = new jsPDF();
+      doc.setFontSize(20);
+      doc.text(`${worker.name} - Attendance Report`, 14, 22);
+      doc.setFontSize(11);
+      doc.setTextColor(100);
+      doc.text(`Company: ${user?.companyName}`, 14, 30);
+      doc.text(`Period: Full History (Last 100 entries)`, 14, 36);
+      doc.text(`Generated on: ${format(new Date(), 'PPP')}`, 14, 42);
+
+      const tableData = workerRecords.map(r => [
+        r.date,
+        r.status.toUpperCase(),
+        r.checkInTime ? format(r.checkInTime, 'hh:mm a') : 'N/A',
+        r.method || 'N/A',
+        r.modifiedByAdmin ? 'YES' : 'NO'
+      ]);
+
+      autoTable(doc, {
+        startY: 50,
+        head: [['Date', 'Status', 'Check-in Time', 'Method', 'Admin Override']],
+        body: tableData,
+        theme: 'striped',
+        headStyles: { fillColor: [79, 70, 229] }
+      });
+
+      doc.save(`${worker.name.replace(/\s+/g, '_')}_Attendance_Report.pdf`);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to generate PDF');
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  const handleSendReply = async () => {
+    if (!user || !replyTo || !replyText.trim()) return;
+    try {
+      await addDoc(collection(firestore, 'messages'), {
+        senderId: user.uid,
+        senderName: user.companyName || 'Admin',
+        receiverId: replyTo.senderId,
+        companyCode: user.companyCode,
+        content: replyText.trim(),
+        createdAt: Date.now(),
+        read: false
+      });
+      setReplyTo(null);
+      setReplyText('');
+      alert('Reply sent!');
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const presentCount = attendance.filter(a => a.status === 'present').length;
@@ -254,7 +335,7 @@ export function AdminDashboard() {
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             className="hover:bg-slate-50/80 transition-all cursor-pointer group"
-                            onClick={() => setSelectedWorker(selectedWorker === worker.uid ? null : worker.uid)}
+                            onClick={() => setSelectedWorkerHistory(worker)}
                           >
                             <td className="px-6 py-5">
                               <div className="flex items-center gap-3">
@@ -292,7 +373,7 @@ export function AdminDashboard() {
                                     <MapPin size={12} className="text-rose-500" />
                                     {record.location ? (
                                       <a 
-                                        href={`https://www.google.com/maps?q=${record.location.latitude},${record.location.longitude}`}
+                                        href={`https://www.google.com/maps?q=${record.location.lat},${record.location.lng}`}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="text-indigo-600 underline hover:text-indigo-800"
@@ -335,8 +416,15 @@ export function AdminDashboard() {
               className="space-y-8"
             >
               <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-sm p-8 space-y-6">
-                <div className="flex justify-between items-center">
-                  <h3 className="text-xl font-black text-slate-900 uppercase">Attendance Override & Logs</h3>
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Personnel Management</h3>
+                  <button 
+                    onClick={exportMonthlyReport}
+                    className="flex items-center gap-2 text-indigo-600 font-black text-[10px] uppercase tracking-widest bg-indigo-50 px-4 py-2.5 rounded-xl border border-indigo-100 hover:bg-white transition-all shadow-sm active:scale-95"
+                  >
+                    <Download size={14} />
+                    Download Monthly Company PDF
+                  </button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                    {workers.map(worker => (
@@ -349,7 +437,7 @@ export function AdminDashboard() {
                         </div>
                         <div className="space-y-2">
                            <button 
-                             onClick={() => setShowOverrideModal({ userId: worker.uid, date: format(new Date(), 'yyyy-MM-dd') })}
+                             onClick={() => setSelectedWorkerHistory(worker)}
                              className="w-full py-3 bg-white border-2 border-slate-200 rounded-xl font-black text-[10px] uppercase tracking-widest text-slate-500 hover:border-indigo-400 hover:text-indigo-600 transition-all flex items-center justify-center gap-2"
                            >
                              <Calendar size={14} /> View Member History
@@ -429,11 +517,16 @@ export function AdminDashboard() {
                            <div className="flex-1 space-y-2">
                               <div className="flex justify-between items-start">
                                  <h4 className="font-black text-slate-800 uppercase text-xs tracking-tight">{sender?.name}</h4>
-                                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{format(m.timestamp, 'hh:mm a')}</span>
+                                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{format(m.createdAt, 'hh:mm a')}</span>
                               </div>
                               <p className="text-sm text-slate-600 leading-relaxed bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">{m.content}</p>
                               <div className="flex gap-2">
-                                 <button className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-lg font-black text-[10px] uppercase tracking-widest hover:bg-indigo-100">Reply</button>
+                                 <button 
+                                  onClick={() => setReplyTo(m)}
+                                  className="px-4 py-2 bg-indigo-50 text-indigo-600 rounded-lg font-black text-[10px] uppercase tracking-widest hover:bg-indigo-100"
+                                 >
+                                    Reply
+                                 </button>
                                  {!m.read && <div className="px-4 py-2 bg-emerald-50 text-emerald-600 rounded-lg font-black text-[10px] uppercase tracking-widest">New Report</div>}
                               </div>
                            </div>
@@ -479,6 +572,109 @@ export function AdminDashboard() {
           <span className={`text-[10px] font-black uppercase tracking-widest ${activeTab === 'messages' ? 'block' : 'hidden md:block'}`}>Support</span>
         </button>
       </nav>
+
+      {/* Worker History Modal */}
+      {selectedWorkerHistory && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-[2.5rem] w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative"
+          >
+            <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+               <div className="flex items-center gap-4">
+                  <div className="w-14 h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-black text-xl">
+                    {selectedWorkerHistory.name.substring(0, 1).toUpperCase()}
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter">{selectedWorkerHistory.name}</h3>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Worker Full History</p>
+                  </div>
+               </div>
+               <div className="flex gap-2">
+                 <button 
+                   onClick={() => exportWorkerReport(selectedWorkerHistory, workerAttendance)}
+                   disabled={isGeneratingPdf}
+                   className="p-3 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-all"
+                   title="Download Worker PDF"
+                 >
+                   <Download size={20} />
+                 </button>
+                 <button onClick={() => setSelectedWorkerHistory(null)} className="p-3 bg-slate-100 text-slate-400 hover:text-slate-900 rounded-xl transition-all"><XCircle size={24} /></button>
+               </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-8">
+               <div className="grid grid-cols-1 gap-4">
+                  {workerAttendance.length === 0 ? (
+                    <div className="text-center py-20 text-slate-400 italic">No attendance records found for this worker.</div>
+                  ) : (
+                    workerAttendance.map(record => (
+                      <div key={record.id} className="bg-white border border-slate-100 p-4 rounded-2xl flex items-center justify-between shadow-sm">
+                         <div className="flex items-center gap-4">
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${record.status === 'present' ? 'bg-emerald-50 text-emerald-500' : 'bg-rose-50 text-rose-500'}`}>
+                              {record.status === 'present' ? <CheckCircle size={20} /> : <XCircle size={20} />}
+                            </div>
+                            <div>
+                               <p className="text-sm font-black text-slate-800">{format(parseISO(record.date), 'EEEE, MMMM do')}</p>
+                               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                 {record.status === 'present' ? `Checked in at ${format(record.checkInTime!, 'hh:mm a')}` : 'Marked Absent'}
+                               </p>
+                            </div>
+                         </div>
+                         <div className="flex items-center gap-2">
+                            {record.modifiedByAdmin && (
+                               <div className="px-3 py-1 bg-amber-50 text-amber-600 rounded-full text-[8px] font-black uppercase tracking-widest border border-amber-100">Adjusted by Admin</div>
+                            )}
+                            <button 
+                              onClick={() => setShowOverrideModal({ userId: selectedWorkerHistory.uid, date: record.date })}
+                              className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                         </div>
+                      </div>
+                    ))
+                  )}
+               </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Reply Modal */}
+      {replyTo && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            className="bg-white rounded-[2rem] w-full max-w-sm p-8 shadow-2xl relative"
+          >
+            <button onClick={() => setReplyTo(null)} className="absolute top-6 right-6 text-slate-400"><XCircle size={24} /></button>
+            <div className="space-y-6">
+               <div className="space-y-1">
+                 <h3 className="text-lg font-black text-slate-900 uppercase">Reply to {replyTo.senderName}</h3>
+                 <div className="p-4 bg-slate-50 rounded-xl text-xs text-slate-500 italic border border-slate-100">
+                    "{replyTo.content}"
+                 </div>
+               </div>
+               <textarea 
+                 value={replyText}
+                 onChange={(e) => setReplyText(e.target.value)}
+                 className="w-full h-32 p-4 bg-slate-50 rounded-2xl border-2 border-slate-100 outline-none focus:border-indigo-400 transition-all text-sm"
+                 placeholder="Type your response here..."
+               />
+               <button 
+                 onClick={handleSendReply}
+                 disabled={!replyText.trim()}
+                 className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all"
+               >
+                 Send Response
+               </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
 
       {/* Manual Override Modal */}
       {showOverrideModal && (

@@ -3,7 +3,7 @@ import { useAuth } from './context/AuthContext';
 import { Button } from './components/ui/Button';
 import { LogIn, UserCircle, Briefcase, PlusCircle, CheckCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { doc, setDoc, query, collection, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, query, collection, where, getDocs, getDoc } from 'firebase/firestore';
 import { firestore } from './lib/firebase';
 import { WorkerDashboard } from './components/WorkerDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -82,12 +82,14 @@ export default function App() {
     const handleSignup = async () => {
       if (!roleSelection || !userName) return;
       setIsSubmitting(true);
+      console.log('Signup started', { roleSelection, userName, companyCodeInput });
       try {
         let companyCode = companyCodeInput.trim().toUpperCase();
         
         if (roleSelection === 'admin') {
           // Generate new company code if admin
           companyCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+          console.log('Creating admin account with company:', companyCode);
           await setDoc(doc(firestore, 'companies', companyCode), {
             code: companyCode,
             adminId: firebaseUser.uid,
@@ -96,14 +98,22 @@ export default function App() {
           });
         } else {
           // Verify company code if worker
-          const companyDoc = await getDocs(query(collection(firestore, 'companies'), where('code', '==', companyCode)));
-          if (companyDoc.empty) {
+          console.log('Verifying company code:', companyCode);
+          if (!companyCode) {
+            alert('Please enter a company code');
+            setIsSubmitting(false);
+            return;
+          }
+          const companySnap = await getDoc(doc(firestore, 'companies', companyCode));
+          if (!companySnap.exists()) {
             alert('Invalid Company Code. Please ask your Admin for the code.');
             setIsSubmitting(false);
             return;
           }
+          console.log('Company verified:', companySnap.data().name);
         }
 
+        console.log('Updating user profile...');
         await updateUser({
           uid: firebaseUser.uid,
           name: userName,
@@ -112,9 +122,10 @@ export default function App() {
           companyCode: companyCode,
           createdAt: Date.now(),
         });
-      } catch (err) {
-        console.error(err);
-        alert('Failed to signup. Please try again.');
+        console.log('User profile updated successfully');
+      } catch (err: any) {
+        console.error('Signup error:', err);
+        alert(`Failed to signup: ${err.message || 'Unknown error'}`);
       } finally {
         setIsSubmitting(false);
       }

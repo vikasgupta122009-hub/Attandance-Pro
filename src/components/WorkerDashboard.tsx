@@ -67,24 +67,42 @@ export function WorkerDashboard() {
       handleFirestoreError(error, OperationType.GET, 'attendance');
     });
 
-    // Listen for messages received by the worker
-    const qMessages = query(
+    // Listen for messages involved with the worker (sent OR received)
+    const qReceived = query(
       collection(firestore, 'messages'),
       where('receiverId', '==', user.uid),
-      orderBy('createdAt', 'desc'),
-      limit(20)
+      limit(30)
     );
-    const unsubMessages = onSnapshot(qMessages, (snap) => {
-      setMessages(snap.docs.map(d => ({ ...d.data(), id: d.id }) as Message));
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'messages');
-    });
+    const qSent = query(
+      collection(firestore, 'messages'),
+      where('senderId', '==', user.uid),
+      limit(30)
+    );
+
+    const unsubReceived = onSnapshot(qReceived, (snap) => {
+      const received = snap.docs.map(d => ({ ...d.data(), id: d.id, type: 'received' } as any));
+      setMessages(prev => {
+        const others = prev.filter(m => (m as any).type !== 'received');
+        const combined = [...others, ...received];
+        return combined.sort((a, b) => b.createdAt - a.createdAt);
+      });
+    }, (error) => console.error('Received messages error:', error));
+
+    const unsubSent = onSnapshot(qSent, (snap) => {
+      const sent = snap.docs.map(d => ({ ...d.data(), id: d.id, type: 'sent' } as any));
+      setMessages(prev => {
+        const others = prev.filter(m => (m as any).type !== 'sent');
+        const combined = [...others, ...sent];
+        return combined.sort((a, b) => b.createdAt - a.createdAt);
+      });
+    }, (error) => console.error('Sent messages error:', error));
 
     return () => {
       unsubscribe();
       unsubTeam();
       unsubTeamAttendance();
-      unsubMessages();
+      unsubReceived();
+      unsubSent();
     };
   }, [user, todayStr]);
 
@@ -411,22 +429,42 @@ export function WorkerDashboard() {
                    exit={{ opacity: 0, y: -10 }}
                    className="space-y-4"
                  >
-                   <h3 className="font-black text-slate-800 text-lg uppercase tracking-tight px-1">Support Inbox</h3>
-                   <div className="space-y-3">
+                   <div className="flex justify-between items-center px-1">
+                    <h3 className="font-black text-slate-800 text-lg uppercase tracking-tight">Support Thread</h3>
+                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg text-[8px] font-black uppercase tracking-widest">Live Updates</div>
+                   </div>
+                   
+                   <div className="space-y-3 max-h-[480px] overflow-y-auto pb-4 pr-1">
                      {messages.length === 0 ? (
                        <div className="text-center p-12 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] italic bg-slate-50 rounded-3xl border-2 border-dashed border-slate-100">
-                          No replies from admin yet
+                          Start a conversation with admin
                        </div>
                      ) : (
-                       messages.map(m => (
-                         <div key={m.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2">
-                           <div className="flex justify-between items-center">
-                             <span className="text-[9px] font-black text-indigo-600 uppercase tracking-widest">From: Admin</span>
-                             <span className="text-[8px] text-slate-400 font-bold">{format(m.createdAt, 'MMM d, hh:mm a')}</span>
-                           </div>
-                           <p className="text-sm text-slate-700 font-medium italic">"{m.content}"</p>
-                         </div>
-                       ))
+                       messages.map(m => {
+                         const isSentByMe = m.senderId === user?.uid;
+                         return (
+                          <div 
+                            key={m.id} 
+                            className={`flex ${isSentByMe ? 'justify-end' : 'justify-start'}`}
+                          >
+                            <div className={`max-w-[85%] p-4 rounded-2xl shadow-sm border ${
+                              isSentByMe 
+                                ? 'bg-indigo-600 text-white border-indigo-500 rounded-tr-none' 
+                                : 'bg-white text-slate-700 border-slate-100 rounded-tl-none'
+                            }`}>
+                              <div className="flex justify-between items-center gap-4 mb-1">
+                                <span className={`text-[8px] font-black uppercase tracking-widest ${isSentByMe ? 'text-indigo-200' : 'text-indigo-600'}`}>
+                                  {isSentByMe ? 'Outbox' : 'Inbox: Admin'}
+                                </span>
+                                <span className={`text-[7px] font-bold ${isSentByMe ? 'text-indigo-300' : 'text-slate-400'}`}>
+                                  {format(m.createdAt, 'hh:mm a')}
+                                </span>
+                              </div>
+                              <p className="text-sm font-medium leading-relaxed">{m.content}</p>
+                            </div>
+                          </div>
+                        );
+                       })
                      )}
                    </div>
                  </motion.div>

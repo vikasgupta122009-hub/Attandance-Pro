@@ -33,7 +33,9 @@ service cloud.firestore {
         return data.uid == userId &&
                data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
                data.role in ['admin', 'worker'] &&
-               (data.companyCode == null || (data.companyCode is string && data.companyCode.size() <= 20));
+               (data.companyCode == null || (data.companyCode is string && data.companyCode.size() <= 20)) &&
+               (data.email == null || (data.email is string && data.email.size() < 100)) &&
+               (data.createdAt is number);
       }
 
       allow get: if isSignedIn();
@@ -55,10 +57,12 @@ service cloud.firestore {
       function isValidCompany(data) {
         return data.code == companyCode &&
                data.adminId == request.auth.uid &&
-               data.name is string && data.name.size() > 0 && data.name.size() < 100;
+               data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+               (data.createdAt is number);
       }
 
       allow get: if isSignedIn();
+      allow list: if isSignedIn();
       allow create: if isSignedIn() && isValidCompany(incoming());
       allow update: if isSignedIn() && isValidCompany(incoming()) && 
                     incoming().adminId == existing().adminId;
