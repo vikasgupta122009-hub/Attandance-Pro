@@ -53,6 +53,7 @@ export function AdminDashboard() {
     const qMessages = query(
       collection(firestore, 'messages'),
       where('receiverId', '==', user.uid),
+      where('companyCode', '==', user.companyCode),
       limit(50)
     );
     const unsubMessages = onSnapshot(qMessages, (snap) => {
@@ -61,7 +62,7 @@ export function AdminDashboard() {
       docs.sort((a, b) => b.createdAt - a.createdAt);
       setMessages(docs);
     }, (error) => {
-      console.error('Messages query error:', error);
+      handleFirestoreError(error, OperationType.GET, 'messages');
     });
 
     return () => {
@@ -78,6 +79,7 @@ export function AdminDashboard() {
     const q = query(
       collection(firestore, 'attendance'),
       where('userId', '==', selectedWorkerHistory.uid),
+      where('companyCode', '==', user.companyCode),
       orderBy('date', 'desc'),
       limit(100)
     );

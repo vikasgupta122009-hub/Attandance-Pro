@@ -22,19 +22,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (fUser) => {
-      setFirebaseUser(fUser);
-      if (fUser) {
-        // Fetch user doc
-        const userDoc = await getDoc(doc(firestore, 'users', fUser.uid));
-        if (userDoc.exists()) {
-          setUser(userDoc.data() as User);
+      try {
+        setFirebaseUser(fUser);
+        if (fUser) {
+          // Fetch user doc
+          const userDoc = await getDoc(doc(firestore, 'users', fUser.uid));
+          if (userDoc.exists()) {
+            setUser(userDoc.data() as User);
+          } else {
+            setUser(null);
+          }
         } else {
           setUser(null);
         }
-      } else {
+      } catch (err) {
+        console.error('Auth check error:', err);
         setUser(null);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return unsubscribe;

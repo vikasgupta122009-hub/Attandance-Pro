@@ -71,11 +71,13 @@ export function WorkerDashboard() {
     const qReceived = query(
       collection(firestore, 'messages'),
       where('receiverId', '==', user.uid),
+      where('companyCode', '==', user.companyCode),
       limit(30)
     );
     const qSent = query(
       collection(firestore, 'messages'),
       where('senderId', '==', user.uid),
+      where('companyCode', '==', user.companyCode),
       limit(30)
     );
 
@@ -86,7 +88,9 @@ export function WorkerDashboard() {
         const combined = [...others, ...received];
         return combined.sort((a, b) => b.createdAt - a.createdAt);
       });
-    }, (error) => console.error('Received messages error:', error));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'messages/received');
+    });
 
     const unsubSent = onSnapshot(qSent, (snap) => {
       const sent = snap.docs.map(d => ({ ...d.data(), id: d.id, type: 'sent' } as any));
@@ -95,7 +99,9 @@ export function WorkerDashboard() {
         const combined = [...others, ...sent];
         return combined.sort((a, b) => b.createdAt - a.createdAt);
       });
-    }, (error) => console.error('Sent messages error:', error));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'messages/sent');
+    });
 
     return () => {
       unsubscribe();

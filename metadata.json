@@ -1,6 +1,9 @@
 {
-  "name": "Universal Attendance & GPS Tracker",
-  "description": "A simple, mobile-first attendance management system with GPS tracking and manual overrides for Workers and Admins.",
-  "requestFramePermissions": ["camera", "geolocation"],
+  "name": "Attendance Pro",
+  "description": "Professional attendance management system with QR scanning, worker history, and PDF reports.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
   "majorCapabilities": []
 }

@@ -4,6 +4,7 @@ import App from './App.tsx';
 import './index.css';
 import { AuthProvider } from './context/AuthContext';
 
+console.log('Attendance Pro: App is booting...');
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
