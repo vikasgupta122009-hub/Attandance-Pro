@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "37024454272",
+    "project_id": "gen-lang-client-0263586935",
+    "storage_bucket": "gen-lang-client-0263586935.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:37024454272:android:612eb6d2eb93b8eef5f865",
+        "android_client_info": {
+          "package_name": "com.attendancepro.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "37024454272-mcddru6de5hkb4a16k4uhik0gmrn3hae.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCcWeUpczIuBAzCLHKxDIlbE9CjASCpAfU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "37024454272-mcddru6de5hkb4a16k4uhik0gmrn3hae.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

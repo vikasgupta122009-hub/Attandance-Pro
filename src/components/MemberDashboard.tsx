@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db, firestore } from '../lib/firebase';
-import { collection, query, where, getDocs, doc, setDoc, onSnapshot, orderBy, limit, addDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, setDoc, onSnapshot, orderBy, limit, addDoc, startAfter, QueryDocumentSnapshot } from 'firebase/firestore';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, parseISO } from 'date-fns';
-import { MapPin, QrCode, Send, Calendar, CheckCircle, XCircle, AlertCircle, LogOut, Users, Edit2 } from 'lucide-react';
+import { MapPin, QrCode, Send, Calendar, CheckCircle, XCircle, AlertCircle, LogOut, Users, Edit2, Settings, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Virtuoso } from 'react-virtuoso';
 import { QRScanner } from './QRScanner';
-import { Attendance, AttendanceStatus, Message, User } from '../types';
+import { Attendance, AttendanceStatus, Message, User, Membership } from '../types';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { handleFirestoreError, OperationType } from '../lib/utils';
 
-export function WorkerDashboard() {
-  const { user, logout } = useAuth();
+export function MemberDashboard() {
+  const { user, logout, switchWorkspace, memberships } = useAuth();
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [todayRecord, setTodayRecord] = useState<Attendance | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -18,19 +20,68 @@ export function WorkerDashboard() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState<'status' | 'calendar' | 'messages' | 'team'>('status');
   const [teamMembers, setTeamMembers] = useState<User[]>([]);
+  const [lastTeamDoc, setLastTeamDoc] = useState<QueryDocumentSnapshot | null>(null);
+  const [hasMoreTeam, setHasMoreTeam] = useState(true);
+  const [loadingTeam, setLoadingTeam] = useState(false);
+  const [teamSearch, setTeamSearch] = useState('');
   const [teamAttendance, setTeamAttendance] = useState<Attendance[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [isSwitchingRole, setIsSwitchingRole] = useState(false);
+  const [isSwitcherOpen, setIsSwitcherOpen] = useState(false);
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
 
+  const fetchTeam = async (reset = false) => {
+    if (!user?.companyId || loadingTeam || (!hasMoreTeam && !reset)) return;
+    setLoadingTeam(true);
+    try {
+      let q = query(
+        collection(firestore, 'users'),
+        where('companyId', '==', user.companyId),
+        orderBy('name'),
+        limit(20)
+      );
+
+      if (teamSearch) {
+        q = query(
+          collection(firestore, 'users'),
+          where('companyId', '==', user.companyId),
+          where('name', '>=', teamSearch),
+          where('name', '<=', teamSearch + '\uf8ff'),
+          orderBy('name'),
+          limit(20)
+        );
+      }
+
+      if (!reset && lastTeamDoc) {
+        q = query(q, startAfter(lastTeamDoc));
+      }
+
+      const snap = await getDocs(q);
+      const newMembers = snap.docs.map(d => d.data() as User);
+      setTeamMembers(prev => reset ? newMembers : [...prev, ...newMembers]);
+      setLastTeamDoc(snap.docs[snap.docs.length - 1] || null);
+      setHasMoreTeam(snap.docs.length === 20);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, 'users');
+    } finally {
+      setLoadingTeam(false);
+    }
+  };
+
   useEffect(() => {
-    if (!user) return;
+    fetchTeam(true);
+  }, [user?.companyId, teamSearch]);
+
+  useEffect(() => {
+    if (!user?.uid || !user?.companyId) return;
 
     // Listen for current month attendance
     const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
     const q = query(
       collection(firestore, 'attendance'),
       where('userId', '==', user.uid),
+      where('companyId', '==', user.companyId),
       where('date', '>=', monthStart)
     );
 
@@ -43,74 +94,60 @@ export function WorkerDashboard() {
       handleFirestoreError(error, OperationType.GET, 'attendance');
     });
 
-    // Listen for team members
-    const qTeam = query(
-      collection(firestore, 'users'),
-      where('companyCode', '==', user.companyCode),
-      where('role', '==', 'worker')
-    );
-    const unsubTeam = onSnapshot(qTeam, (snap) => {
-      setTeamMembers(snap.docs.map(d => d.data() as User));
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'users');
-    });
-
-    // Listen for team attendance today - secure query by companyCode
+    // Listen for team attendance today - secure query by companyId
     const qTeamAttendance = query(
       collection(firestore, 'attendance'),
-      where('companyCode', '==', user.companyCode),
+      where('companyId', '==', user.companyId),
       where('date', '==', todayStr)
     );
     const unsubTeamAttendance = onSnapshot(qTeamAttendance, (snap) => {
       setTeamAttendance(snap.docs.map(d => d.data() as Attendance));
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'attendance');
+      if (error.code === 'permission-denied') {
+        console.warn('Team attendance access restricted');
+        setTeamAttendance([]);
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'attendance/team');
+      }
     });
 
-    // Listen for messages involved with the worker (sent OR received)
-    const qReceived = query(
+    // Listen for messages (Group OR Direct aimed at this worker)
+    // We now split into two queries if needed, or stick to companyId but handle results carefully.
+    // To match the new rule: (type == 'group' && isMemberOfCompany) || senderId == uid || receiverId == uid
+    // We can use a query that filters by companyId AND (type == 'group' OR senderId == uid OR receiverId == uid)
+    // Firestore OR queries are now supported!
+    const qMessages = query(
       collection(firestore, 'messages'),
-      where('receiverId', '==', user.uid),
-      where('companyCode', '==', user.companyCode),
-      limit(30)
-    );
-    const qSent = query(
-      collection(firestore, 'messages'),
-      where('senderId', '==', user.uid),
-      where('companyCode', '==', user.companyCode),
-      limit(30)
+      where('companyId', '==', user.companyId),
+      orderBy('createdAt', 'desc'),
+      limit(50)
     );
 
-    const unsubReceived = onSnapshot(qReceived, (snap) => {
-      const received = snap.docs.map(d => ({ ...d.data(), id: d.id, type: 'received' } as any));
-      setMessages(prev => {
-        const others = prev.filter(m => (m as any).type !== 'received');
-        const combined = [...others, ...received];
-        return combined.sort((a, b) => b.createdAt - a.createdAt);
-      });
+    const unsubMessages = onSnapshot(qMessages, (snap) => {
+      const allMsgs = snap.docs.map(d => ({ ...d.data(), id: d.id } as Message));
+      // Clientside secondary filtering to ensure privacy if for some reason the rule leaky (rules are primary)
+      const filtered = allMsgs.filter(m => 
+        m.type === 'group' || 
+        m.senderId === user.uid || 
+        m.receiverId === user.uid
+      );
+      setMessages(filtered);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'messages/received');
-    });
-
-    const unsubSent = onSnapshot(qSent, (snap) => {
-      const sent = snap.docs.map(d => ({ ...d.data(), id: d.id, type: 'sent' } as any));
-      setMessages(prev => {
-        const others = prev.filter(m => (m as any).type !== 'sent');
-        const combined = [...others, ...sent];
-        return combined.sort((a, b) => b.createdAt - a.createdAt);
-      });
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'messages/sent');
+      // Don't crash on permission errors, just clear or log
+      if (error.code === 'permission-denied') {
+        console.warn('Message access restricted:', error.message);
+        setMessages([]);
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'messages');
+      }
     });
 
     return () => {
       unsubscribe();
-      unsubTeam();
       unsubTeamAttendance();
-      unsubReceived();
-      unsubSent();
+      unsubMessages();
     };
-  }, [user, todayStr]);
+  }, [user?.uid, user?.companyId, todayStr]);
 
   const markAttendance = async (method: 'button' | 'qr') => {
     if (!user || isSubmitting) return;
@@ -119,13 +156,22 @@ export function WorkerDashboard() {
     try {
       // Get GPS
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10000 });
+        navigator.geolocation.getCurrentPosition(resolve, reject, { 
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0
+        });
+      }).catch(err => {
+        if (err.code === 1) throw new Error('PERMISSION_DENIED: Please enable location access in settings.');
+        if (err.code === 3) throw new Error('TIMEOUT: Could not get GPS signal. Try moving outside.');
+        throw new Error('GPS_ERROR: Failed to capture location.');
       });
 
       const attendanceId = `${user.uid}_${todayStr}`;
       const record: Attendance = {
         id: attendanceId,
         userId: user.uid,
+        companyId: user.companyId!,
         companyCode: user.companyCode!,
         date: todayStr,
         status: 'present',
@@ -157,19 +203,30 @@ export function WorkerDashboard() {
     setIsSubmitting(true);
     try {
       // Find admin
-      const companyQuery = query(collection(firestore, 'companies'), where('code', '==', user.companyCode));
-      const companySnap = await getDocs(companyQuery);
+      if (!user.companyId) {
+        alert('No organization connected.');
+        return;
+      }
+      const companyQuery = query(collection(firestore, 'companies'), where('id', '==', user.companyId));
+      let companySnap;
+      try {
+        companySnap = await getDocs(companyQuery);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, 'companies/find-admin');
+        return;
+      }
       if (companySnap.empty) return;
       const adminId = companySnap.docs[0].data().adminId;
 
       await addDoc(collection(firestore, 'messages'), {
         senderId: user.uid,
         senderName: user.name,
-        receiverId: adminId,
-        companyCode: user.companyCode,
+        receiverId: adminId || null,
+        companyId: user.companyId,
         content: message.trim(),
+        type: 'group',
         createdAt: Date.now(),
-        read: false
+        readBy: [user.uid]
       });
       setMessage('');
       alert('Message sent to Admin!');
@@ -185,6 +242,32 @@ export function WorkerDashboard() {
     end: endOfMonth(new Date())
   });
 
+  const [confirmSwitchRole, setConfirmSwitchRole] = useState(false);
+
+  const switchToAdmin = async () => {
+    if (!user || isSwitchingRole) return;
+    
+    if (!confirmSwitchRole) {
+      setConfirmSwitchRole(true);
+      setTimeout(() => setConfirmSwitchRole(false), 3000);
+      return;
+    }
+
+    setIsSwitchingRole(true);
+    setConfirmSwitchRole(false);
+    try {
+      // Use the robust switchWorkspace logic for a full identity reset
+      await switchWorkspace(user.companyId || '', user.companyCode || '', user.companyName || '', 'admin');
+    } catch (err: any) {
+      console.error('Role switch error:', err);
+      alert(`Error: ${err.message || 'Failed to switch role'}`);
+      setIsSwitchingRole(false);
+    }
+  };
+
+  const currentMembership = memberships.find(m => m.companyId === user?.companyId);
+  const canAdmin = currentMembership?.role === 'admin';
+
   return (
     <div className="bg-slate-100 min-h-screen py-8 px-4 flex items-center justify-center font-sans">
       <div className="w-full max-w-sm bg-slate-900 rounded-[3rem] p-4 border-[8px] border-slate-800 shadow-2xl relative overflow-hidden flex flex-col h-[780px]">
@@ -194,14 +277,37 @@ export function WorkerDashboard() {
             <span className="text-[10px] font-black uppercase tracking-[0.2em] opacity-50">Portal Access</span>
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-              <span className="font-bold text-sm truncate max-w-[120px]">{user?.name}</span>
+              <span className="font-bold text-sm truncate max-w-[80px]">{user?.name}</span>
+              {canAdmin && (
+                <button 
+                  onClick={switchToAdmin}
+                  disabled={isSwitchingRole}
+                  className={`ml-2 px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all ${
+                    confirmSwitchRole ? 'bg-rose-500 text-white' : 'bg-indigo-500/20 text-indigo-400'
+                  }`}
+                >
+                  {confirmSwitchRole ? 'Confirm?' : 'Admin Mode'}
+                </button>
+              )}
             </div>
           </div>
           <button onClick={logout} className="flex items-center gap-2 px-3 py-1.5 bg-rose-500/10 text-rose-400 rounded-xl hover:bg-rose-500/20 transition-all group">
             <LogOut size={16} />
-            <span className="text-[8px] font-black uppercase tracking-widest hidden group-hover:block">Switch</span>
+            <span className="text-[8px] font-black uppercase tracking-widest hidden group-hover:block">Logout</span>
+          </button>
+          <button 
+            onClick={() => setIsSwitcherOpen(true)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 text-indigo-400 rounded-xl hover:bg-indigo-500/20 transition-all group disabled:opacity-50"
+          >
+            <Settings size={16} />
+            <span className="text-[8px] font-black uppercase tracking-widest hidden group-hover:block text-nowrap">Workspaces</span>
           </button>
         </div>
+
+        <WorkspaceSwitcher 
+          isOpen={isSwitcherOpen}
+          onClose={() => setIsSwitcherOpen(false)}
+        />
 
         {/* Status Card - Modern Indicator */}
         <div className="px-3 mb-6">
@@ -222,8 +328,8 @@ export function WorkerDashboard() {
             </div>
             {todayRecord && (
               <div className="text-right">
-                <p className="text-[14px] font-black text-white">{format(todayRecord.checkInTime!, 'hh:mm')}</p>
-                <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">{format(todayRecord.checkInTime!, 'aa')}</p>
+                <p className="text-[14px] font-black text-white">{todayRecord.checkInTime ? format(todayRecord.checkInTime, 'hh:mm') : '--:--'}</p>
+                <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">{todayRecord.checkInTime ? format(todayRecord.checkInTime, 'aa') : ''}</p>
               </div>
             )}
           </div>
@@ -285,7 +391,7 @@ export function WorkerDashboard() {
                          </div>
                          <div className="space-y-1">
                            <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Entry Recorded</h3>
-                           <p className="text-xs text-slate-500 font-medium">Successfully verified at <span className="text-emerald-600 font-black">{format(todayRecord.checkInTime!, 'hh:mm a')}</span></p>
+                           <p className="text-xs text-slate-500 font-medium">Successfully verified at <span className="text-emerald-600 font-black">{todayRecord.checkInTime ? format(todayRecord.checkInTime, 'hh:mm a') : 'N/A'}</span></p>
                          </div>
                          <div className="inline-flex items-center gap-2 bg-white px-4 py-2 rounded-full border border-emerald-100 text-[10px] font-black text-emerald-700 uppercase tracking-widest shadow-sm">
                            <MapPin size={12} />
@@ -390,39 +496,58 @@ export function WorkerDashboard() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  className="space-y-4"
+                  className="space-y-4 h-full flex flex-col"
                 >
                   <h3 className="font-black text-slate-800 text-lg uppercase tracking-tight px-1">My Site Team</h3>
-                  <div className="grid grid-cols-1 gap-2.5">
-                    {teamMembers.length === 0 ? (
-                      <div className="text-center p-12 bg-slate-50 rounded-2xl italic text-slate-400 text-sm">Waiting for teammates...</div>
-                    ) : (
-                      teamMembers.map(member => {
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                    <input 
+                      type="text"
+                      placeholder="Search teammates..."
+                      value={teamSearch}
+                      onChange={(e) => setTeamSearch(e.target.value)}
+                      className="w-full pl-9 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs focus:ring-4 focus:ring-indigo-100 outline-none transition-all"
+                    />
+                  </div>
+                  
+                  <div className="flex-1 min-h-[400px]">
+                    <Virtuoso
+                      style={{ height: '400px' }}
+                      data={teamMembers}
+                      endReached={() => fetchTeam()}
+                      itemContent={(index, member) => {
                         const isPresent = teamAttendance.some(a => a.userId === member.uid);
                         return (
-                          <div key={member.uid} className="bg-white p-4 rounded-2xl border border-slate-100 flex items-center justify-between shadow-sm hover:translate-x-1 transition-transform">
-                            <div className="flex items-center gap-4">
-                              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black text-xs ${
-                                member.uid === user?.uid ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-100 text-slate-500'
-                              }`}>
-                                {member.name.substring(0, 2).toUpperCase()}
+                          <div key={member.uid} className="pb-2.5 px-0.5">
+                            <div className="bg-white p-4 rounded-2xl border border-slate-100 flex items-center justify-between shadow-sm hover:translate-x-1 transition-transform">
+                              <div className="flex items-center gap-4">
+                                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black text-xs ${
+                                  member.uid === user?.uid ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-100 text-slate-500'
+                                }`}>
+                                  {member.name.substring(0, 2).toUpperCase()}
+                                </div>
+                                <div>
+                                  <p className="text-[12px] font-black text-slate-800 leading-none">{member.name} {member.uid === user?.uid && '(You)'}</p>
+                                  <p className={`text-[10px] font-bold uppercase tracking-tight mt-1 ${isPresent ? 'text-emerald-500' : 'text-slate-300'}`}>
+                                    {isPresent ? 'Currently Present' : 'Pending Check-in'}
+                                  </p>
+                                </div>
                               </div>
-                              <div>
-                                <p className="text-[12px] font-black text-slate-800 leading-none">{member.name} {member.uid === user?.uid && '(You)'}</p>
-                                <p className={`text-[10px] font-bold uppercase tracking-tight mt-1 ${isPresent ? 'text-emerald-500' : 'text-slate-300'}`}>
-                                  {isPresent ? 'Currently Present' : 'Pending Check-in'}
-                                </p>
-                              </div>
+                              {isPresent && (
+                                <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-500 flex items-center justify-center animate-pulse">
+                                  <CheckCircle size={18} />
+                                </div>
+                              )}
                             </div>
-                            {isPresent && (
-                              <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-500 flex items-center justify-center animate-pulse">
-                                <CheckCircle size={18} />
-                              </div>
-                            )}
                           </div>
                         );
-                      })
-                    )}
+                      }}
+                      components={{
+                        Footer: () => loadingTeam ? (
+                          <div className="p-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest animate-pulse">Scanning Site...</div>
+                        ) : null
+                      }}
+                    />
                   </div>
                 </motion.div>
               )}

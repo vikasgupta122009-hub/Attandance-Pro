@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
 import { useAuth } from './context/AuthContext';
 import { Button } from './components/ui/Button';
-import { LogIn, UserCircle, Briefcase, PlusCircle, CheckCircle } from 'lucide-react';
+import { LogIn, UserCircle, Briefcase, PlusCircle, CheckCircle, Shield, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { doc, setDoc, query, collection, where, getDocs, getDoc } from 'firebase/firestore';
+import { doc, setDoc, query, collection, where, getDocs, getDoc, writeBatch } from 'firebase/firestore';
 import { firestore } from './lib/firebase';
-import { WorkerDashboard } from './components/WorkerDashboard';
+import { MemberDashboard } from './components/MemberDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { UserRole } from './types';
+import { handleFirestoreError, OperationType } from './lib/utils';
 
 export default function App() {
-  const { user, firebaseUser, loading, signIn, logout, updateUser } = useAuth();
+  const { user, firebaseUser, loading, signIn, logout, updateUser, memberships, switchWorkspace } = useAuth();
   const [roleSelection, setRoleSelection] = useState<UserRole | null>(null);
   const [userName, setUserName] = useState('');
 
@@ -22,14 +23,6 @@ export default function App() {
   const [companyCodeInput, setCompanyCodeInput] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-      </div>
-    );
-  }
 
   if (!firebaseUser) {
     return (
@@ -77,52 +70,141 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  // If user profile is not complete or no active workspace is selected
+  if (!user || !user.companyId) {
+    // If user has memberships but no active workspace set in the main user doc
+    if (memberships.length > 0) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-center">
+          <div className="max-w-md w-full bg-white rounded-[3rem] p-10 shadow-2xl">
+            <div className="w-20 h-20 bg-indigo-50 border-4 border-indigo-100 rounded-2xl flex items-center justify-center mb-6 mx-auto">
+              <Shield size={40} className="text-indigo-600" />
+            </div>
+            <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic mb-4">Select Directory</h2>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-8">You have multiple active roles</p>
+            
+            <div className="space-y-3 mb-8">
+              {memberships.map(m => (
+                <button
+                  key={m.companyId}
+                  onClick={() => switchWorkspace(m.companyId, m.companyCode, m.companyName, m.role)}
+                  className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between hover:bg-slate-100 transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-black">
+                      {m.companyName[0]}
+                    </div>
+                    <div className="text-left">
+                      <p className="text-sm font-black text-slate-800 uppercase truncate max-w-[150px]">{m.companyName}</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{m.role}</p>
+                    </div>
+                  </div>
+                  <ChevronRight size={18} className="text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
+                </button>
+              ))}
+            </div>
+
+            <button 
+              onClick={() => logout()}
+              className="w-full py-4 text-rose-500 font-black uppercase text-[10px] tracking-widest hover:bg-rose-50 rounded-2xl transition-all"
+            >
+              Sign out / Change Account
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     // Signup Flow: Choose Role
     const handleSignup = async () => {
-      if (!roleSelection || !userName) return;
+      if (!roleSelection || !userName || !firebaseUser) return;
       setIsSubmitting(true);
-      console.log('Signup started', { roleSelection, userName, companyCodeInput });
+      
+      const batch = writeBatch(firestore);
+      const currentTimestamp = Date.now();
+      const userId = firebaseUser.uid;
+
       try {
         let companyCode = companyCodeInput.trim().toUpperCase();
+        let companyId = '';
+        let groupName = '';
         
         if (roleSelection === 'admin') {
-          // Generate new company code if admin
-          companyCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-          console.log('Creating admin account with company:', companyCode);
-          await setDoc(doc(firestore, 'companies', companyCode), {
+          companyId = doc(collection(firestore, 'companies')).id;
+          companyCode = companyCode || Math.random().toString(36).substring(2, 8).toUpperCase();
+          if (companyCode.length > 6) companyCode = companyCode.substring(0, 6);
+          while (companyCode.length < 6) companyCode += 'X';
+          groupName = companyName || `${userName}'s Group`;
+
+          batch.set(doc(firestore, 'companies', companyId), {
+            id: companyId,
             code: companyCode,
-            adminId: firebaseUser.uid,
-            name: companyName || `${userName}'s Group`,
-            createdAt: Date.now()
+            adminId: userId,
+            name: groupName,
+            createdAt: currentTimestamp
           });
         } else {
-          // Verify company code if worker
+          // Verify company code if member
           console.log('Verifying company code:', companyCode);
           if (!companyCode) {
             alert('Please enter a company code');
             setIsSubmitting(false);
             return;
           }
-          const companySnap = await getDoc(doc(firestore, 'companies', companyCode));
-          if (!companySnap.exists()) {
+          const companyQuery = query(collection(firestore, 'companies'), where('code', '==', companyCode));
+          let companySnap;
+          try {
+            companySnap = await getDocs(companyQuery);
+          } catch (e) {
+            handleFirestoreError(e, OperationType.LIST, 'companies');
+          }
+          
+          if (!companySnap || companySnap.empty) {
             alert('Invalid Company Code. Please ask your Admin for the code.');
             setIsSubmitting(false);
             return;
           }
-          console.log('Company verified:', companySnap.data().name);
+          
+          const companyDoc = companySnap.docs[0];
+          companyId = companyDoc.id;
+          groupName = (companyDoc.data() as any).name;
         }
 
-        console.log('Updating user profile...');
-        await updateUser({
-          uid: firebaseUser.uid,
+        // 1. Create/Update User Profile
+        const userPayload = {
+          uid: userId,
           name: userName,
           email: firebaseUser.email,
           role: roleSelection,
+          companyId: companyId,
           companyCode: companyCode,
-          createdAt: Date.now(),
-        });
-        console.log('User profile updated successfully');
+          companyName: groupName,
+          activeWorkspace: companyId,
+          createdAt: currentTimestamp,
+          updatedAt: currentTimestamp
+        };
+        batch.set(doc(firestore, 'users', userId), userPayload);
+
+        // 2. Create Membership
+        const membershipPayload = {
+          companyId: companyId,
+          companyCode: companyCode,
+          companyName: groupName,
+          role: roleSelection,
+          joinedAt: currentTimestamp
+        };
+        batch.set(doc(firestore, 'users', userId, 'memberships', companyId), membershipPayload);
+
+        await batch.commit();
+        console.log('Signup batch committed successfully');
       } catch (err: any) {
         console.error('Signup error:', err);
         alert(`Failed to signup: ${err.message || 'Unknown error'}`);
@@ -160,7 +242,7 @@ export default function App() {
                   }`}
                 >
                   <UserCircle size={32} />
-                  <span className="font-black uppercase tracking-tight text-xs">Worker</span>
+                  <span className="font-black uppercase tracking-tight text-xs">Member</span>
                 </button>
                 <button
                   onClick={() => setRoleSelection('admin')}
@@ -233,7 +315,7 @@ export default function App() {
   // Loaded Dashboard
   return (
     <div className="min-h-screen bg-gray-50">
-      {user.role === 'admin' ? <AdminDashboard /> : <WorkerDashboard />}
+      {user.role === 'admin' ? <AdminDashboard /> : <MemberDashboard />}
     </div>
   );
 }

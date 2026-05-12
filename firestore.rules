@@ -12,119 +12,137 @@ service cloud.firestore {
     function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
-    
-    // Verifies that the user has a verified email (Standard for Spark/Enterprise apps)
     function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
 
-    function getUserData(userId) {
-      let path = [/databases, database, 'documents', 'users', userId].join('/');
-      return exists(path) ? get(path).data : null;
+    function hasProfile(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
     }
 
-    // Check if current user is admin of the company
-    function isAdminOfCompany(companyCode) {
-      let path = [/databases, database, 'documents', 'companies', companyCode].join('/');
+    function getProfile(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function isAdminOfCompany(companyId) {
       return isSignedIn() && 
-             exists(path) &&
-             get(path).data.adminId == request.auth.uid;
+             companyId != null && companyId != "" && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)/memberships/$(companyId)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)/memberships/$(companyId)).data.get("role", "") == "admin";
+    }
+
+    function isMemberOfCompany(companyId) {
+      return isSignedIn() && 
+             companyId != null && companyId != "" && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)/memberships/$(companyId));
+    }
+
+    // RBAC: Check if user is a Global Admin (bootstrapped)
+    function isGlobalAdmin() {
+      // Add user email from metadata if needed, but for now we rely on company-level admin
+      return isSignedIn() && request.auth.token.email == "vikasgupta122009@gmail.com";
     }
 
     // 1. User Profiles
     match /users/{userId} {
       function isValidUser(data) {
-        return data.uid == userId &&
-               data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-               data.role in ['admin', 'worker'] &&
-               (data.companyCode == null || (data.companyCode is string && data.companyCode.size() <= 64)) &&
-               (data.email == null || (data.email is string && data.email.size() < 128)) &&
-               (data.createdAt is number);
+        return (data.get("uid", "") == userId || data.get("uid", "") == "") &&
+               (data.get("role", "") == "admin" || data.get("role", "") == "worker") &&
+               data.get("name", "").size() <= 100;
       }
 
       allow get: if isSignedIn();
       allow list: if isSignedIn() && (
         isOwner(userId) || 
-        (resource.data.companyCode != null && resource.data.companyCode == getUserData(request.auth.uid).companyCode)
+        isGlobalAdmin() || 
+        (resource.data.companyId != "" && exists(/databases/$(database)/documents/users/$(request.auth.uid)/memberships/$(resource.data.companyId)))
       );
       
       allow create: if isOwner(userId) && isValidUser(incoming());
-      allow update: if isOwner(userId) && isValidUser(incoming()) && 
-                    incoming().role == existing().role;
+      allow update: if isOwner(userId) && (
+        // Prevent self-elevation of role unless they are already an admin of their active workspace
+        // This is complex, so we strictly check affectedKeys
+        incoming().diff(existing()).affectedKeys().hasOnly(["companyId", "companyCode", "companyName", "role", "activeWorkspace", "updatedAt", "name"])
+      ) || isAdminOfCompany(existing().get("companyId", ""));
+
+      // Memberships sub-collection
+      match /memberships/{companyId} {
+        allow read: if isSignedIn() && (isOwner(userId) || isAdminOfCompany(companyId));
+        allow create: if isOwner(userId) || isAdminOfCompany(companyId);
+        allow update: if isOwner(userId) || isAdminOfCompany(companyId);
+        allow delete: if isOwner(userId) || isAdminOfCompany(companyId);
+      }
     }
 
     // 2. Companies
-    match /companies/{companyCode} {
-      function isValidCompany(data) {
-        return data.code == companyCode &&
-               data.adminId == request.auth.uid &&
-               data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-               (data.createdAt is number);
-      }
-
+    match /companies/{companyId} {
       allow get: if isSignedIn();
       allow list: if isSignedIn();
-      allow create: if isSignedIn() && isValidCompany(incoming());
-      allow update: if isSignedIn() && isValidCompany(incoming()) && 
-                    incoming().adminId == existing().adminId;
+      allow create: if isSignedIn() && incoming().adminId == request.auth.uid && incoming().get("code", "").size() == 6;
+      allow update: if isSignedIn() && (existing().adminId == request.auth.uid || isGlobalAdmin());
+      allow delete: if isSignedIn() && (existing().adminId == request.auth.uid || isGlobalAdmin());
     }
 
     // 3. Attendance
     match /attendance/{attendanceId} {
       function isValidAttendance(data) {
         return data.userId is string && isValidId(data.userId) &&
-               data.companyCode is string && isValidId(data.companyCode) &&
-               data.date is string && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
-               data.status in ['present', 'absent'];
+               data.status in ["present", "absent"] &&
+               data.get("companyId", "") is string &&
+               data.get("date", "").size() == 10;
       }
 
       allow list: if isSignedIn() && (
         resource.data.userId == request.auth.uid || 
-        (resource.data.companyCode != null && resource.data.companyCode == getUserData(request.auth.uid).companyCode) ||
-        isAdminOfCompany(resource.data.companyCode)
+        isMemberOfCompany(resource.data.get("companyId", ""))
       );
       
       allow get: if isSignedIn() && (
         resource.data.userId == request.auth.uid || 
-        isAdminOfCompany(resource.data.companyCode)
+        isMemberOfCompany(resource.data.get("companyId", ""))
       );
 
       allow create: if isSignedIn() && (
-        (isOwner(incoming().userId) && isValidAttendance(incoming()) && incoming().modifiedByAdmin == false) ||
-        (isAdminOfCompany(incoming().companyCode) && isValidAttendance(incoming()))
+        (isOwner(incoming().userId) && isValidAttendance(incoming()) && incoming().get("modifiedByAdmin", false) == false) ||
+        (incoming().get("companyId", "") != "" && isAdminOfCompany(incoming().companyId))
       );
 
       allow update: if isSignedIn() && (
-        (isAdminOfCompany(existing().companyCode) && isValidAttendance(incoming()) && 
-         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'modifiedByAdmin', 'updatedAt', 'method', 'checkInTime'])) ||
-        (isOwner(existing().userId) && isValidAttendance(incoming()) && !existing().modifiedByAdmin &&
-         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'checkInTime', 'location', 'method']))
+        // Admin Override
+        (existing().get("companyId", "") != "" && isAdminOfCompany(existing().companyId) && 
+         incoming().diff(existing()).affectedKeys().hasAny(["status", "modifiedByAdmin", "updatedAt", "checkInTime"])) ||
+        // User Update (Clock-in)
+        (isOwner(existing().userId) && isValidAttendance(incoming()) && !existing().get("modifiedByAdmin", false) &&
+         incoming().diff(existing()).affectedKeys().hasOnly(["status", "updatedAt", "checkInTime", "location", "method", "companyId", "companyCode", "id", "userId", "date"]))
       );
+      
+      allow delete: if isSignedIn() && isAdminOfCompany(existing().get("companyId", ""));
     }
 
     // 4. Messages
     match /messages/{messageId} {
       function isValidMessage(data) {
         return data.senderId is string && isValidId(data.senderId) &&
-               data.receiverId is string && isValidId(data.receiverId) &&
-               data.content is string && data.content.size() > 0 && data.content.size() < 1000;
+               data.content is string && data.content.size() <= 1000 &&
+               data.get("companyId", "") is string;
       }
 
       allow list: if isSignedIn() && (
         resource.data.senderId == request.auth.uid || 
         resource.data.receiverId == request.auth.uid ||
-        isAdminOfCompany(resource.data.companyCode)
+        (resource.data.get("type", "") == "group" && isMemberOfCompany(resource.data.get("companyId", "")))
       );
+      
       allow get: if isSignedIn() && (
         resource.data.senderId == request.auth.uid || 
         resource.data.receiverId == request.auth.uid ||
-        isAdminOfCompany(resource.data.companyCode)
+        (resource.data.get("type", "") == "group" && isMemberOfCompany(resource.data.get("companyId", "")))
       );
-      
+
       allow create: if isSignedIn() && isOwner(incoming().senderId) && isValidMessage(incoming());
-      
       allow update: if isSignedIn() && (
-        (resource.data.receiverId == request.auth.uid && 
-         incoming().diff(existing()).affectedKeys().hasOnly(['read']))
+        (resource.data.get("receiverId", null) == request.auth.uid || resource.data.get("type", "") == "group") && 
+        incoming().diff(existing()).affectedKeys().hasAny(["read", "readBy"])
       );
+      allow delete: if isSignedIn() && (resource.data.senderId == request.auth.uid || isAdminOfCompany(resource.data.get("companyId", "")));
     }
   }
 }

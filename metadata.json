@@ -1,6 +1,6 @@
 {
-  "name": "Attendance Pro",
-  "description": "Professional attendance management system with QR scanning, worker history, and PDF reports.",
+  "name": "Attendly",
+  "description": "Professional attendance management system with QR scanning, member history, PDF reports, and Android support.",
   "requestFramePermissions": [
     "camera",
     "geolocation"

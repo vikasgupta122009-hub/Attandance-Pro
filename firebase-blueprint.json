@@ -49,6 +49,18 @@
       },
       "required": ["userId", "date", "status", "companyCode"]
     },
+    "Membership": {
+      "title": "Membership",
+      "description": "Represents a user's membership in a specific company.",
+      "type": "object",
+      "properties": {
+        "companyCode": { "type": "string" },
+        "companyName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "worker"] },
+        "joinedAt": { "type": "number" }
+      },
+      "required": ["companyCode", "role"]
+    },
     "Message": {
       "title": "Message",
       "description": "Simple message between worker and admin.",
@@ -70,7 +82,11 @@
       "schema": "User",
       "description": "User profiles."
     },
-    "/companies/{companyCode}": {
+    "/users/{userId}/memberships/{companyId}": {
+      "schema": "Membership",
+      "description": "Companies this user belongs to."
+    },
+    "/companies/{companyId}": {
       "schema": "Company",
       "description": "Company registration records."
     },
