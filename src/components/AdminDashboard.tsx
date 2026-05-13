@@ -11,6 +11,7 @@ import { Attendance, User, Message, Company, Membership } from '../types';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import { DeviceSettings } from './DeviceSettings';
 import { handleFirestoreError, OperationType } from '../lib/utils';
 
 export function AdminDashboard() {
@@ -33,6 +34,7 @@ export function AdminDashboard() {
   const [isRegeneratingCode, setIsRegeneratingCode] = useState(false);
   const [isSwitchingRole, setIsSwitchingRole] = useState(false);
   const [isSwitcherOpen, setIsSwitcherOpen] = useState(false);
+  const [isDeviceSettingsOpen, setIsDeviceSettingsOpen] = useState(false);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
   const [memberToRemove, setMemberToRemove] = useState<User | null>(null);
   const [showSuccessionModal, setShowSuccessionModal] = useState(false);
@@ -624,6 +626,32 @@ export function AdminDashboard() {
         onClose={() => setIsSwitcherOpen(false)}
       />
 
+      <AnimatePresence>
+        {isDeviceSettingsOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+             <motion.div
+               initial={{ opacity: 0 }}
+               animate={{ opacity: 1 }}
+               exit={{ opacity: 0 }}
+               onClick={() => setIsDeviceSettingsOpen(false)}
+               className="absolute inset-0 bg-slate-900/90 backdrop-blur-md"
+             />
+             <motion.div
+               initial={{ scale: 0.9, y: 20 }}
+               animate={{ scale: 1, y: 0 }}
+               exit={{ scale: 0.9, y: 20 }}
+               className="relative w-full max-w-sm bg-slate-50 rounded-[3rem] p-8 shadow-2xl overflow-hidden"
+             >
+                <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
+                  <Smartphone size={120} />
+                </div>
+                <h3 className="text-xl font-black uppercase tracking-tight text-slate-800 mb-6">Device Configuration</h3>
+                <DeviceSettings onClose={() => setIsDeviceSettingsOpen(false)} />
+             </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <div className="max-w-6xl mx-auto p-4 md:p-8 space-y-8">
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
@@ -1073,21 +1101,21 @@ export function AdminDashboard() {
                     {/* Account & Session Section */}
                     <div className="space-y-6 pt-6 border-t border-slate-100">
                        <div className="flex items-center gap-3 text-slate-600">
-                          <Briefcase size={20} />
-                          <h4 className="font-black uppercase tracking-widest text-xs">Session & Account</h4>
+                          <Smartphone size={20} />
+                          <h4 className="font-black uppercase tracking-widest text-xs">Device & Session</h4>
                        </div>
                        
                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="p-6 bg-slate-50 border border-slate-200 rounded-3xl space-y-4">
                              <div>
-                                <h5 className="font-black text-slate-900 uppercase text-xs tracking-tight">Switch Workspace</h5>
-                                <p className="text-[10px] text-slate-500 font-bold mt-1 leading-relaxed italic">Manage other organizations or join a new team.</p>
+                                <h5 className="font-black text-slate-900 uppercase text-xs tracking-tight">App Configuration</h5>
+                                <p className="text-[10px] text-slate-500 font-bold mt-1 leading-relaxed italic">Manage local bridge and device cache settings.</p>
                              </div>
                              <button 
-                               onClick={() => setIsSwitcherOpen(true)}
+                               onClick={() => setIsDeviceSettingsOpen(true)}
                                className="w-full px-6 py-3 bg-indigo-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 active:scale-95 flex items-center justify-center gap-2"
                              >
-                                <Briefcase size={14} /> Switch Workspace
+                                <Settings size={14} /> Open Device Settings
                              </button>
                           </div>
 

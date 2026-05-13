@@ -60,3 +60,12 @@ export interface Message {
   read?: boolean;
   readBy?: string[];
 }
+
+declare global {
+  interface Window {
+    AndroidBridge?: {
+      clearCache: () => void;
+      showToast: (message: string) => void;
+    };
+  }
+}

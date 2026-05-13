@@ -9,6 +9,7 @@ import { Virtuoso } from 'react-virtuoso';
 import { QRScanner } from './QRScanner';
 import { Attendance, AttendanceStatus, Message, User, Membership } from '../types';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import { DeviceSettings } from './DeviceSettings';
 import { handleFirestoreError, OperationType } from '../lib/utils';
 
 export function MemberDashboard() {
@@ -28,6 +29,7 @@ export function MemberDashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isSwitchingRole, setIsSwitchingRole] = useState(false);
   const [isSwitcherOpen, setIsSwitcherOpen] = useState(false);
+  const [isDeviceSettingsOpen, setIsDeviceSettingsOpen] = useState(false);
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
 
@@ -299,8 +301,15 @@ export function MemberDashboard() {
             onClick={() => setIsSwitcherOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 text-indigo-400 rounded-xl hover:bg-indigo-500/20 transition-all group disabled:opacity-50"
           >
+            <Users size={16} />
+            <span className="text-[8px] font-black uppercase tracking-widest hidden group-hover:block text-nowrap">Switch Group</span>
+          </button>
+          <button 
+            onClick={() => setIsDeviceSettingsOpen(true)}
+            className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 text-indigo-400 rounded-xl hover:bg-indigo-500/20 transition-all group disabled:opacity-50"
+          >
             <Settings size={16} />
-            <span className="text-[8px] font-black uppercase tracking-widest hidden group-hover:block text-nowrap">Workspaces</span>
+            <span className="text-[8px] font-black uppercase tracking-widest hidden group-hover:block text-nowrap">Device</span>
           </button>
         </div>
 
@@ -308,6 +317,30 @@ export function MemberDashboard() {
           isOpen={isSwitcherOpen}
           onClose={() => setIsSwitcherOpen(false)}
         />
+
+        <AnimatePresence>
+          {isDeviceSettingsOpen && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-6"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                exit={{ scale: 0.9, y: 20 }}
+                className="bg-slate-50 w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden"
+              >
+                <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
+                  <Settings size={120} />
+                </div>
+                <h3 className="text-xl font-black uppercase tracking-tight text-slate-800 mb-6">Device Configuration</h3>
+                <DeviceSettings onClose={() => setIsDeviceSettingsOpen(false)} />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Status Card - Modern Indicator */}
         <div className="px-3 mb-6">
