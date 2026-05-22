@@ -1,9 +1,11 @@
 {
-  "name": "Attendly",
-  "description": "Professional attendance management system with QR scanning, member history, PDF reports, and Android support.",
+  "name": "Attendly Pro Mobile",
+  "description": "Enterprise-grade Native Cross-Platform Attendance Terminal. Pure Flutter mobile architecture optimized for high-performance workforce management.",
   "requestFramePermissions": [
     "camera",
     "geolocation"
   ],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

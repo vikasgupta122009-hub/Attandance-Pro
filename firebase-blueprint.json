@@ -1,102 +1,124 @@
 {
   "entities": {
     "User": {
-      "title": "User",
-      "description": "Represents a user (Admin or Worker) in the system.",
+      "title": "User Profile",
+      "description": "Stores user role and profile information",
       "type": "object",
       "properties": {
-        "uid": { "type": "string" },
-        "name": { "type": "string" },
-        "email": { "type": "string", "format": "email" },
+        "email": { "type": "string" },
+        "fullName": { "type": "string" },
         "role": { "type": "string", "enum": ["admin", "worker"] },
-        "companyCode": { "type": "string", "description": "The code used to link workers to an admin's company." },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "groupId": { "type": "string" },
+        "activeProfileId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "name", "role"]
-    },
-    "Company": {
-      "title": "Company",
-      "description": "Represents a company group created by an Admin.",
-      "type": "object",
-      "properties": {
-        "code": { "type": "string", "description": "Unique permanent company code." },
-        "adminId": { "type": "string" },
-        "name": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["code", "adminId"]
+      "required": ["email", "role"]
     },
     "Attendance": {
-      "title": "Attendance",
-      "description": "Daily attendance record for a worker.",
+      "title": "Attendance Record",
+      "description": "Stores individual check-in and check-out events",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
-        "companyCode": { "type": "string" },
-        "date": { "type": "string", "description": "YYYY-MM-DD" },
-        "status": { "type": "string", "enum": ["present", "absent"] },
-        "checkInTime": { "type": "string", "format": "date-time" },
-        "method": { "type": "string", "enum": ["button", "qr", "manual"] },
+        "userName": { "type": "string" },
+        "type": { "type": "string", "enum": ["in", "out"] },
+        "timestamp": { "type": "string", "format": "date-time" },
         "location": {
           "type": "object",
           "properties": {
             "lat": { "type": "number" },
-            "lng": { "type": "number" }
+            "lng": { "type": "number" },
+            "address": { "type": "string" }
           }
         },
-        "modifiedByAdmin": { "type": "boolean" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "verified": { "type": "boolean" },
+        "qrData": { "type": "string" },
+        "method": { "type": "string", "enum": ["manual", "qr", "GPS"] },
+        "groupId": { "type": "string" },
+        "updatedBy": { "type": "string" }
       },
-      "required": ["userId", "date", "status", "companyCode"]
+      "required": ["userId", "type", "timestamp"]
     },
-    "Membership": {
-      "title": "Membership",
-      "description": "Represents a user's membership in a specific company.",
+    "Group": {
+      "title": "Organization Group",
+      "description": "Global settings for the attendance group",
       "type": "object",
       "properties": {
-        "companyCode": { "type": "string" },
-        "companyName": { "type": "string" },
-        "role": { "type": "string", "enum": ["admin", "worker"] },
-        "joinedAt": { "type": "number" }
+        "name": { "type": "string" },
+        "groupCode": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "deleted": { "type": "boolean" }
       },
-      "required": ["companyCode", "role"]
+      "required": ["name", "createdBy"]
     },
     "Message": {
-      "title": "Message",
-      "description": "Simple message between worker and admin.",
+      "title": "Chat Message",
+      "description": "Inner group communication",
       "type": "object",
       "properties": {
         "senderId": { "type": "string" },
         "senderName": { "type": "string" },
-        "receiverId": { "type": "string" },
-        "companyCode": { "type": "string" },
-        "content": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "read": { "type": "boolean" }
+        "text": { "type": "string" },
+        "groupId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
       },
-      "required": ["senderId", "receiverId", "content", "createdAt"]
+      "required": ["senderId", "text", "timestamp"]
+    },
+    "LeaveRequest": {
+      "title": "Leave Request",
+      "description": "Request for time off",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "date": { "type": "string" },
+        "groupId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "reason", "date"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Company news",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "authorId": { "type": "string" },
+        "groupId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "content"]
     }
   },
   "firestore": {
-    "/users/{userId}": {
+    "/users/{userId}/profiles/{profileId}": {
       "schema": "User",
-      "description": "User profiles."
+      "description": "Sub-profiles for a specific user account (Admin/Worker switch capability)"
     },
-    "/users/{userId}/memberships/{companyId}": {
-      "schema": "Membership",
-      "description": "Companies this user belongs to."
-    },
-    "/companies/{companyId}": {
-      "schema": "Company",
-      "description": "Company registration records."
-    },
-    "/attendance/{attendanceId}": {
+    "/attendance/{recordId}": {
       "schema": "Attendance",
-      "description": "Flattened attendance records. ID format: userId_YYYY-MM-DD"
+      "description": "Global attendance records"
     },
-    "/messages/{messageId}": {
+    "/settings/group": {
+      "schema": "Group",
+      "description": "Global group configuration"
+    },
+    "/messages/{msgId}": {
       "schema": "Message",
-      "description": "Communications between workers and admins."
+      "description": "Company chat messages"
+    },
+    "/leaves/{leaveId}": {
+      "schema": "LeaveRequest",
+      "description": "Employee leave requests"
+    },
+    "/announcements/{infoId}": {
+      "schema": "Announcement",
+      "description": "Global company broadcast messages"
     }
   }
 }

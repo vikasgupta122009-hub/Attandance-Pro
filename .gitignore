@@ -1,8 +1,30 @@
-node_modules/
+# Flutter/Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
 build/
+
+# Android
+.gradle/
+local.properties
+*.keystore
+*.jks
+app/build/
+
+# iOS
+.bundle/
+Pods/
+DerivedData/
+*.xcworkspace
+*.xcscheme
+
+# Firebase
+google-services.json
+GoogleService-Info.plist
+
+# Web/Node
+node_modules/
 dist/
-coverage/
-.DS_Store
-*.log
-.env*
-!.env.example
+.env
+.env.local
